@@ -31,17 +31,32 @@ from pathlib import Path
 
 from configsys.plugins import Driver, Result
 
-# GPU backend token -> the CMake -D flags it turns on, and -> (toolchain probe, SDK component). The
-# SDK name is what the binding's `requires:` should list AND what the error message points at.
+# GPU backend token -> the CMake -D flags it turns on. Tokens are GRANULAR and compose:
+#   cuda   WITH_CUDA (core/imgproc/cudaarithm/... acceleration); needs only the CUDA toolkit.
+#   cudnn  the DNN CUDA backend (OPENCV_DNN_CUDA); needs cuDNN ON TOP of cuda -> IMPLIES cuda
+#          (auto-added in _gpu_backends) and its OWN `cudnn` dependency component + probe.
+#   hip    AMD ROCm/HIP (experimental in OpenCV 4.x).
+# The hardware video-codec bits (WITH_NVCUVID/NVCUVENC) need NVIDIA's separate Video Codec SDK, so
+# they're OFF by default (a from-source build otherwise emits noisy "requires Video Codec SDK"
+# warnings) — opt back in per-binding with an extra `-D...=ON` in build-opencv.sh if you have it.
 _GPU_FLAGS = {
-    'cuda': ['-DWITH_CUDA=ON', '-DOPENCV_DNN_CUDA=ON'],
-    'hip':  ['-DWITH_HIP=ON'],                          # experimental in OpenCV 4.x
+    'cuda':  ['-DWITH_CUDA=ON', '-DWITH_NVCUVID=OFF', '-DWITH_NVCUVENC=OFF'],
+    'cudnn': ['-DOPENCV_DNN_CUDA=ON'],                 # rides on cuda's WITH_CUDA
+    'hip':   ['-DWITH_HIP=ON'],
 }
+# each backend -> the toolchain checks it needs, as (probe cmd, SDK component, human label). The SDK
+# name is what the binding's `requires:` should list AND what the "missing" error points at. A
+# backend may need MORE than one (cudnn wants the cuDNN headers/libs specifically).
 _GPU_PROBE = {
-    'cuda': ('command -v nvcc',  'cuda-toolkit'),
-    'hip':  ('command -v hipcc', 'rocm-hip'),
+    'cuda':  [('command -v nvcc', 'cuda-toolkit', 'nvcc (CUDA toolkit)')],
+    'cudnn': [('ls /usr/include/cudnn.h /usr/include/*/cudnn.h /usr/local/cuda*/include/cudnn.h '
+               '>/dev/null 2>&1 || ldconfig -p 2>/dev/null | grep -q libcudnn',
+               'cudnn', 'cuDNN headers/libs')],
+    'hip':   [('command -v hipcc', 'rocm-hip', 'hipcc (ROCm)')],
 }
-_GPU_ALIAS = {'nvidia': ['cuda'], 'amd': ['hip'], 'rocm': ['hip']}
+# vendor aliases. `nvidia` is the FULL NVIDIA stack (CUDA + the DNN cuDNN backend) — the common "give
+# me everything" choice; `cuda`/`cudnn` stay available for a leaner or à-la-carte build.
+_GPU_ALIAS = {'nvidia': ['cuda', 'cudnn'], 'amd': ['hip'], 'rocm': ['hip']}
 
 
 class OpencvBuild(Driver):
@@ -82,7 +97,48 @@ class OpencvBuild(Driver):
                                      f'or an alias {", ".join(_GPU_ALIAS)})')
                 if b not in out:
                     out.append(b)
+        # the DNN cuDNN backend rides on WITH_CUDA — asking for cudnn implies cuda (so its flags,
+        # probe, and requires: all come along); insert cuda just before cudnn to keep order sane.
+        if 'cudnn' in out and 'cuda' not in out:
+            out.insert(out.index('cudnn'), 'cuda')
         return out
+
+    def _cuda_host_compiler_flag(self):
+        '''If the default gcc is newer than this CUDA's nvcc accepts, return a
+        `-DCUDA_HOST_COMPILER=/usr/bin/gcc-<N>` flag pointing at the newest installed gcc it DOES
+        accept, else ''. nvcc's ceiling is the `#if __GNUC__ > N` guard in crt/host_config.h; too-new
+        a host compiler makes the .cu compiles die with "unsupported GNU version". Read-only and
+        in-process (like native_pkg_file's format probe) so it's honest under --pretend.'''
+        import re
+        import shutil
+        import subprocess
+        nvcc = shutil.which('nvcc')
+        if not nvcc:
+            return ''
+        ceiling = None
+        for h in (Path(nvcc).resolve().parent.parent / 'include' / 'crt' / 'host_config.h',
+                  Path('/usr/include/crt/host_config.h')):
+            try:
+                m = re.search(r'__GNUC__\s*>\s*(\d+)', h.read_text())
+            except OSError:
+                continue
+            if m:
+                ceiling = int(m.group(1))
+                break
+        if ceiling is None:
+            return ''
+        try:
+            major = int(subprocess.run(['gcc', '-dumpversion'], capture_output=True,
+                                       text=True).stdout.strip().split('.')[0])
+        except (ValueError, OSError):
+            return ''
+        if major <= ceiling:
+            return ''                                  # the default gcc is already acceptable
+        for k in range(ceiling, 6, -1):                # newest installed gcc-K that nvcc accepts
+            alt = Path(f'/usr/bin/gcc-{k}')
+            if alt.exists():
+                return f'-DCUDA_HOST_COMPILER={alt}'
+        return ''
 
     def _gpu_cmake(self, backends):
         '''The deduped CMake flag string for a set of backends (empty = CPU-only).'''
@@ -135,11 +191,16 @@ class OpencvBuild(Driver):
         # `requires:` so resolution installs it. Verify here; fail loud rather than a silent CPU
         # build. (Under --pretend every probe reports ok, so a dry run never spuriously blocks.)
         for b in backends:
-            probe, sdk = _GPU_PROBE[b]
-            if not self.runner.run(probe).ok:
-                return Result(f"(opencv-build: gpu {b!r} requested but its toolchain is missing — add "
-                              f"the {sdk!r} component to this binding's requires:, then sync)", 1)
+            for probe, sdk, label in _GPU_PROBE[b]:
+                if not self.runner.run(probe).ok:
+                    return Result(f"(opencv-build: gpu {b!r} needs {label}, which isn't present — add "
+                                  f"the {sdk!r} component to this binding's requires:, then sync)", 1)
         gpu_cmake = self._gpu_cmake(backends)
+        if any(b in ('cuda', 'cudnn') for b in backends):
+            # steer nvcc at a gcc it supports if the default is too new (else the .cu compiles fail)
+            hc = self._cuda_host_compiler_flag()
+            if hc:
+                gpu_cmake = f'{gpu_cmake} {hc}'.strip()
         contrib = '1' if self._contrib(rc, backends) else '0'
         ref = shlex.quote(rc.fields.get('ref') or '')
         d = shlex.quote(str(self._build_dir(rc)))

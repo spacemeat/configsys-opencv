@@ -31,16 +31,34 @@ opencv: { install: [ { via: opencv-build  ref: 4.11.0  dir: opencv-git
 - **`dir`** — build-tree parent (scope-honored); holds `opencv/` (+ `opencv_contrib/`).
 - **`prefix`** — install prefix (default `~/.local`). Libraries land in `$PREFIX/lib` — add it to
   your loader path (`LD_LIBRARY_PATH` / `ldconfig`) and `$PREFIX/lib/pkgconfig` to `PKG_CONFIG_PATH`.
-- **`gpu`** — GPU backends to compile. Tokens / aliases → CMake flags + required SDK:
+- **`gpu`** — GPU backends to compile. Tokens COMPOSE; name each token's SDK in the same binding's
+  `requires:`.
 
-  | token | alias | CMake | requires (SDK) |
+  | token | CMake it adds | requires (SDK) | notes |
   | --- | --- | --- | --- |
-  | `cuda` | `nvidia` | `-DWITH_CUDA=ON -DOPENCV_DNN_CUDA=ON` | `cuda-toolkit` |
-  | `hip` | `amd`, `rocm` | `-DWITH_HIP=ON` (experimental) | `rocm-hip` |
+  | `cuda` | `-DWITH_CUDA=ON` (+ `NVCUVID/NVCUVENC=OFF`) | `cuda-toolkit` | CUDA accel; **no** cuDNN needed |
+  | `cudnn` | `-DOPENCV_DNN_CUDA=ON` | `cudnn` | the DNN CUDA backend; **implies `cuda`** |
+  | `hip` | `-DWITH_HIP=ON` (experimental) | `rocm-hip` | AMD |
 
-  Absent = CPU-only. Name the SDK in the **same binding's `requires:`** — the driver checks the
-  toolchain is on `PATH` and refuses to build (loudly, before a 30-min compile) if it's missing,
-  rather than silently falling back to CPU.
+  Aliases: **`nvidia`** = `[cuda, cudnn]` (the full stack), `amd`/`rocm` = `[hip]`. Absent = CPU-only.
+
+  The DNN CUDA backend (`cudnn` / `OPENCV_DNN_CUDA`) hard-requires cuDNN, an **extra** dependency on
+  top of the CUDA toolkit — hence the separate `cudnn` token + component. Plain `gpu: [cuda]` builds
+  fine with just the toolkit; add `cudnn` (or use `nvidia`) for the DNN backend. The hardware
+  video-codec bits (`WITH_NVCUVID/NVCUVENC`) need NVIDIA's separate Video Codec SDK, so they're OFF
+  by default (they otherwise spam "requires Video Codec SDK" warnings).
+
+  The driver checks each backend's toolchain is present and refuses to build (loudly, before a
+  30-min compile) if it's missing — no silent CPU fallback. For CUDA it also **auto-steers `nvcc`
+  at a supported host gcc** (`-DCUDA_HOST_COMPILER=/usr/bin/gcc-N`) when the default `gcc` is newer
+  than the CUDA header's `__GNUC__ > N` ceiling, and clears a stale `CMakeCache.txt` on a GPU
+  reconfigure so CUDA is re-detected fresh.
+
+  **cuDNN install caveat:** cuDNN isn't in the distro repos (NVIDIA license). The `cudnn` component
+  installs `libcudnn8-dev` (cuDNN-8, covers CUDA 11 / early 12; use `libcudnn9-dev-cuda-12` for a
+  cuDNN-9 box), which needs **NVIDIA's CUDA repo** configured. Base configsys's `cuda-toolkit` is the
+  *distro* package and does NOT add that repo — if apt can't find `libcudnn8-dev`, add NVIDIA's CUDA
+  network repo (`cuda-keyring`) or the `cudnn-local` `.deb` first.
 - **`contrib`** — clone `opencv_contrib`'s extra modules (bool). Default: ON when `gpu` is set (the
   CUDA modules — `cudaarithm`, `cudaimgproc`, … — live there), OFF for a plain CPU build.
 

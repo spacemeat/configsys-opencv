@@ -15,13 +15,33 @@
             install: [
                 { via: opencv-build  ref: 4.11.0  dir: opencv-git  requires: [ cmake, cpp-toolchain, git ] }
 
-                // GPU examples — replace the CPU binding above with one of these:
+                // GPU examples — replace the CPU binding above with one of these. GPU tokens compose:
+                //   cuda  = WITH_CUDA (core/imgproc/cuda* accel); needs only cuda-toolkit.
+                //   cudnn = the DNN CUDA backend; needs cuDNN AND implies cuda -> add the `cudnn`
+                //           dependency component too. `nvidia` is shorthand for [ cuda, cudnn ].
                 // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ cuda ]
-                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit ] }   // NVIDIA (auto-clones opencv_contrib)
+                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit ] }               // CUDA, no DNN backend (no cuDNN needed)
+                // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ nvidia ]
+                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit, cudnn ] }         // the works: CUDA + cuDNN DNN backend
                 // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ hip ]
-                //   requires: [ cmake, cpp-toolchain, git, rocm-hip ] }       // AMD (experimental in OpenCV)
+                //   requires: [ cmake, cpp-toolchain, git, rocm-hip ] }                    // AMD (experimental in OpenCV)
                 // add `contrib: true` to a CPU binding to also clone opencv_contrib's extra modules
             ]
+        }
+
+        // cuDNN — NVIDIA's deep-neural-network primitives. OpenCV's DNN CUDA backend
+        // (OPENCV_DNN_CUDA / the `cudnn` gpu token) hard-requires it. NOT in the distro repos
+        // (NVIDIA license): it comes from NVIDIA's CUDA repo. `libcudnn8-dev` is the cuDNN-8 dev
+        // package (headers + the runtime it pulls) — 8.x covers CUDA 11 and early 12; for a cuDNN-9 /
+        // CUDA-12.3+ box the package is `libcudnn9-dev-cuda-12`, swap the name per your CUDA line.
+        // `requires: cuda-toolkit` orders the toolkit first. NOTE: base configsys's cuda-toolkit is
+        // the DISTRO package (apt nvidia-cuda-toolkit), which does NOT add NVIDIA's repo — if apt
+        // can't find libcudnn8-dev, add NVIDIA's CUDA network repo (cuda-keyring) or the cudnn-local
+        // .deb first. (A `cuda-repo` helper to automate that is a natural follow-up.)
+        cudnn: {
+            description: "NVIDIA cuDNN — DNN primitives; OpenCV's DNN CUDA backend needs it."
+            requires: cuda-toolkit
+            install: [ { via: native  when: "debian or redhat"  name: { apt: libcudnn8-dev  dnf: libcudnn8-devel } } ]
         }
     }
 }
