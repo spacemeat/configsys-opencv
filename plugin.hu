@@ -1,0 +1,19 @@
+{
+    // configsys-opencv — a code plugin that adds a from-source, GPU-capable build of OpenCV as an
+    // opt-in method on the base `opencv` component. Base configsys ships opencv as a CPU-only native
+    // package; this plugin ADDS a `via: opencv-build` binding whose `gpu:` field compiles CUDA (or
+    // experimental HIP) support and clones opencv_contrib for the cuda modules. `native` stays the
+    // default, so loading this plugin never changes a resolution — pick the GPU build explicitly:
+    //   configsys pin set opencv opencv-build
+    //
+    // GPU builds are exactly the "gnarly" case the configsys-source plugin bars (GPU-SDK
+    // resolution), so — like configsys-blender / configsys-kicad — OpenCV+CUDA gets its own bespoke
+    // plugin with a small orchestration driver. The wavy recipe lives in build-opencv.sh.
+    name: configsys-opencv
+    requires-abi: 1
+
+    provides: { drivers: [ opencv-build ] }
+
+    code: opencv.py       // the orchestration driver (needs `plugin trust`, since it runs code)
+    data: [ opencv.hu ]   // adds the `via: opencv-build` binding to base's `opencv`
+}

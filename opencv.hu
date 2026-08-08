@@ -1,0 +1,27 @@
+{
+    // ADD a from-source build method to base configsys's `opencv`. Bindings merge additively, so
+    // this sits ALONGSIDE the core `via: native` (CPU) binding — native stays the default; the
+    // source build is opt-in with `configsys pin set opencv opencv-build`.
+    //
+    // CPU-only by default: the CPU binding below requires nothing beyond the recipe's build deps
+    // (cmake + a C++ compiler, pulled by `requires:`). To build with GPU acceleration, replace it
+    // with a `gpu:` variant AND name the matching SDK in `requires:` on the SAME binding — the
+    // driver maps the tokens to CMake flags and refuses to build if the toolchain is missing (never
+    // a silent CPU fallback). Because the SDK is a `requires:` on the GPU binding only, a CPU build
+    // never drags in something heavy like CUDA. `gpu: [ cuda ]` auto-clones opencv_contrib (the CUDA
+    // modules — cudaarithm, cudaimgproc, ... — live there). Token table + knobs are in README.md.
+    components: {
+        opencv: {
+            install: [
+                { via: opencv-build  ref: 4.11.0  dir: opencv-git  requires: [ cmake, cpp-toolchain, git ] }
+
+                // GPU examples — replace the CPU binding above with one of these:
+                // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ cuda ]
+                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit ] }   // NVIDIA (auto-clones opencv_contrib)
+                // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ hip ]
+                //   requires: [ cmake, cpp-toolchain, git, rocm-hip ] }       // AMD (experimental in OpenCV)
+                // add `contrib: true` to a CPU binding to also clone opencv_contrib's extra modules
+            ]
+        }
+    }
+}
