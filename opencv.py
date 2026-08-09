@@ -49,8 +49,12 @@ _GPU_FLAGS = {
 # backend may need MORE than one (cudnn wants the cuDNN headers/libs specifically).
 _GPU_PROBE = {
     'cuda':  [('command -v nvcc', 'cuda-toolkit', 'nvcc (CUDA toolkit)')],
+    # `ls A B C 2>/dev/null | grep -q .` — prints the paths that DO exist (errors for the misses go
+    # to /dev/null) and succeeds if ANY line came out. NOT `ls A B C >/dev/null 2>&1`: that exits
+    # non-zero whenever *any* listed path is missing, even when cudnn.h is present. ldconfig is a
+    # secondary check (the .so may be installed before its cache is refreshed, so header-first).
     'cudnn': [('ls /usr/include/cudnn.h /usr/include/*/cudnn.h /usr/local/cuda*/include/cudnn.h '
-               '>/dev/null 2>&1 || ldconfig -p 2>/dev/null | grep -q libcudnn',
+               '2>/dev/null | grep -q . || ldconfig -p 2>/dev/null | grep -q libcudnn',
                'cudnn', 'cuDNN headers/libs')],
     'hip':   [('command -v hipcc', 'rocm-hip', 'hipcc (ROCm)')],
 }

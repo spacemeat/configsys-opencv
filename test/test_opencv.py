@@ -61,6 +61,15 @@ def test_contrib_default_follows_gpu_unless_forced():
     assert d._contrib(_RC(contrib='false'), ['cuda']) is False     # forced off
 
 
+def test_cudnn_probe_survives_missing_paths():
+    # regression: `ls A B C >/dev/null 2>&1` exits non-zero if ANY listed path is missing — even when
+    # /usr/include/cudnn.h IS present — so it must use the `ls ... 2>/dev/null | grep -q .` form,
+    # which prints the paths that exist and succeeds if any did.
+    probe = opencv._GPU_PROBE['cudnn'][0][0]
+    assert '2>/dev/null | grep -q .' in probe
+    assert '>/dev/null 2>&1 ||' not in probe
+
+
 def test_cuda_host_compiler_flag_no_nvcc(monkeypatch):
     # no nvcc on PATH -> no host-compiler override (never blocks / never guesses)
     import shutil
