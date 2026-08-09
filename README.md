@@ -37,8 +37,11 @@ You don't uncomment or copy a GPU binding — the right one is **auto-selected f
 `opencv` ships four real `opencv-build` bindings (CPU / CUDA-11 / CUDA-12 / HIP), gated on two
 detected **facets** (see the base `docs/facets.md`):
 
-- **`gpu`** (vendor, from `lspci`) → `gpu:nvidia` picks a CUDA build, `gpu:amd` picks HIP, neither
-  picks the CPU source build.
+- **`gpu`** (vendor) → `gpu:nvidia` picks a CUDA build, `gpu:amd` picks HIP, neither picks the CPU
+  source build. Detected via `lspci` (from **pciutils** — present on ~every workstation, but not
+  minimal images/containers); if `lspci` is absent it falls back to `nvidia-smi`/`rocminfo`. If
+  detection ever misfires, override it: `facets: { gpu: nvidia }` in the config, or
+  `CONFIGSYS_FACET_gpu=nvidia`.
 - **`cuda`** (version, from `nvcc --version`) → `cuda < 12` picks the **CUDA-11 stack** (cuDNN 8 +
   gcc-10), `cuda >= 12` picks the **CUDA-12 stack** (cuDNN 9). Each stack has **explicit, versioned
   dependencies** — no guessing, no install-time surprises.
