@@ -50,18 +50,25 @@ opencv: { install: [ { via: opencv-build  ref: 4.11.0  dir: opencv-git
 
   The driver checks each backend's toolchain is present and refuses to build (loudly, before a
   30-min compile) if it's missing — no silent CPU fallback. For CUDA it also **auto-steers `nvcc`
-  at a supported host gcc** (`-DCUDA_HOST_COMPILER=/usr/bin/gcc-N`) when the default `gcc` is newer
-  than the CUDA header's `__GNUC__ > N` ceiling, and clears a stale `CMakeCache.txt` on a GPU
-  reconfigure so CUDA is re-detected fresh.
+  at a workable host gcc** (`-DCUDA_HOST_COMPILER=/usr/bin/gcc-N`): it reads nvcc's `__GNUC__ > N`
+  ceiling from `crt/host_config.h` and, if the default `gcc` is newer, points nvcc at the newest
+  installed gcc within the ceiling. **Special case:** when the ceiling is 11 (the CUDA 11.4–11.6
+  era), gcc 11 itself trips a known nvcc bug parsing gcc-11's `<functional>`/`std_function.h`
+  (*"parameter packs not expanded"*), so the driver steps the target down to **gcc 10** (the
+  known-good host for that CUDA line). If no usable gcc is installed it **fails fast with the fix**
+  (`apt install gcc-10 g++-10`) instead of dying mid-compile. Override with **`cuda-host-compiler:
+  /usr/bin/gcc-N`** on the binding. It also clears a stale `CMakeCache.txt` on a GPU reconfigure so
+  CUDA is re-detected fresh.
 
-  **cuDNN installs itself.** cuDNN isn't in the distro repos (NVIDIA license), so on debian/redhat
-  the `cudnn` component `requires:` a **`cuda-repo`** helper that sets up NVIDIA's CUDA network repo
-  first (Debian: the `cuda-keyring` `.deb`; RHEL: `dnf config-manager`), then installs `libcudnn8-dev`
-  — no manual repo step. `cuda-repo` derives NVIDIA's distro-specific path (`ubuntu2204`/`debian12`/
-  `rhel9`/…) from `/etc/os-release` (via `UBUNTU_CODENAME`, so pop/mint/elementary map to the right
-  ubuntu segment). On **Arch**, cuDNN is in the official repos (`pacman cudnn`) so no helper is used.
-  `libcudnn8-dev` is cuDNN-8 (CUDA 11 / early 12); for a cuDNN-9 / CUDA-12.3+ box swap the name to
-  `libcudnn9-dev-cuda-12` in `opencv.hu`.
+  **cuDNN installs itself** (repo + package + loader cache). Not in the distro repos (NVIDIA
+  license), so on debian/redhat the `cudnn` component `requires:` a **`cuda-repo`** helper that sets
+  up NVIDIA's CUDA network repo (Debian: the `cuda-keyring` `.deb`; RHEL: `dnf config-manager`),
+  derived from `/etc/os-release` (`ubuntu2204`/`debian12`/`rhel9`/… — via `UBUNTU_CODENAME` so
+  pop/mint/elementary map to the right ubuntu segment). It then installs `libcudnn8-dev` **and runs
+  `ldconfig`** — NVIDIA's libcudnn8 packages skip the ldconfig trigger, so without this the runtime
+  `.so` isn't in the loader cache and the built OpenCV can't load it. On **Arch**, cuDNN is in the
+  official repos (`pacman cudnn`, ldconfig handled) so no helper is used. `libcudnn8-dev` is cuDNN-8
+  (CUDA 11 / early 12); for a cuDNN-9 / CUDA-12.3+ box swap the name to `libcudnn9-dev-cuda-12`.
 - **`contrib`** — clone `opencv_contrib`'s extra modules (bool). Default: ON when `gpu` is set (the
   CUDA modules — `cudaarithm`, `cudaimgproc`, … — live there), OFF for a plain CPU build.
 

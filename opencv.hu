@@ -60,13 +60,28 @@
         // (NVIDIA license), so the binding pulls `cuda-repo` (adds NVIDIA's source) then installs
         // `libcudnn8-dev` — the cuDNN-8 dev package (headers + runtime), covering CUDA 11 / early 12;
         // for a cuDNN-9 / CUDA-12.3+ box swap the name to `libcudnn9-dev-cuda-12`.
+        // debian/redhat use `via: script` (not plain native) for ONE reason: NVIDIA's libcudnn8
+        // packages skip the ldconfig trigger, so the runtime .so lands but isn't in the loader cache
+        // — the freshly-built OpenCV then can't load libcudnn.so.8 at runtime. The script installs
+        // the dev package (headers + runtime) AND runs ldconfig. Arch's pacman handles ldconfig, so
+        // it stays plain native. `requires: cuda-repo` on the deb/rpm bindings adds NVIDIA's source.
         cudnn: {
             description: "NVIDIA cuDNN — DNN primitives; OpenCV's DNN CUDA backend needs it."
             requires: cuda-toolkit
             install: [
-                { via: native  when: "arch"  name: cudnn }                         // Arch ships it; no NVIDIA repo
-                { via: native  when: "debian or redhat"  requires: cuda-repo        // NVIDIA repo carries it
-                  name: { apt: libcudnn8-dev  dnf: libcudnn8-devel } }
+                { via: native  when: "arch"  name: cudnn }                         // Arch ships it (pacman runs ldconfig); no NVIDIA repo
+                { via: script  when: "debian"  requires: cuda-repo
+                  install-cmd:   'sudo apt-get install -y libcudnn8-dev && sudo ldconfig'
+                  version-cmd:   'dpkg-query -W -f=${Version} libcudnn8-dev 2>/dev/null'
+                  version-re:    '([0-9][0-9.+-]*)'
+                  uninstall-cmd: 'sudo apt-get remove -y libcudnn8-dev && sudo ldconfig'
+                  location:      'libcudnn8-dev (apt) + ldconfig cache' }
+                { via: script  when: "redhat"  requires: cuda-repo
+                  install-cmd:   'sudo dnf install -y libcudnn8-devel && sudo ldconfig'
+                  version-cmd:   'rpm -q --qf %{VERSION} libcudnn8-devel 2>/dev/null'
+                  version-re:    '([0-9][0-9.+-]*)'
+                  uninstall-cmd: 'sudo dnf remove -y libcudnn8-devel && sudo ldconfig'
+                  location:      'libcudnn8-devel (dnf) + ldconfig cache' }
             ]
         }
     }

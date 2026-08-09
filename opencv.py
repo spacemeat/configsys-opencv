@@ -107,18 +107,26 @@ class OpencvBuild(Driver):
             out.insert(out.index('cudnn'), 'cuda')
         return out
 
-    def _cuda_host_compiler_flag(self):
-        '''If the default gcc is newer than this CUDA's nvcc accepts, return a
-        `-DCUDA_HOST_COMPILER=/usr/bin/gcc-<N>` flag pointing at the newest installed gcc it DOES
-        accept, else ''. nvcc's ceiling is the `#if __GNUC__ > N` guard in crt/host_config.h; too-new
-        a host compiler makes the .cu compiles die with "unsupported GNU version". Read-only and
-        in-process (like native_pkg_file's format probe) so it's honest under --pretend.'''
+    def _cuda_host_compiler_flag(self, rc):
+        '''Steer nvcc at a host gcc it can actually use. Returns (flag, error): `flag` is a
+        `-DCUDA_HOST_COMPILER=...` string ('' if the default gcc is fine), `error` a message when no
+        usable gcc is installed (so install() can fail fast with a fix, not 20 min into a cryptic
+        compile). Priority: an explicit binding `cuda-host-compiler:` wins; else auto-detect.
+
+        Auto-detect ceiling = nvcc's `#if __GNUC__ > N` in crt/host_config.h (too-new a host gcc dies
+        with "unsupported GNU version"). SPECIAL CASE: when the ceiling is 11 — the CUDA 11.4–11.6 era
+        — gcc 11 itself trips a well-known nvcc bug parsing gcc-11's <functional>/std_function.h
+        ("parameter packs not expanded"), so we step the target down to gcc 10 (the known-good host
+        for that CUDA line; still within the ceiling). Read-only + in-process, honest under --pretend.'''
         import re
         import shutil
         import subprocess
+        override = rc.fields.get('cuda-host-compiler')
+        if override:
+            return f'-DCUDA_HOST_COMPILER={override}', None
         nvcc = shutil.which('nvcc')
         if not nvcc:
-            return ''
+            return '', None
         ceiling = None
         for h in (Path(nvcc).resolve().parent.parent / 'include' / 'crt' / 'host_config.h',
                   Path('/usr/include/crt/host_config.h')):
@@ -130,19 +138,23 @@ class OpencvBuild(Driver):
                 ceiling = int(m.group(1))
                 break
         if ceiling is None:
-            return ''
+            return '', None
+        if ceiling == 11:
+            ceiling = 10               # dodge the gcc-11 std_function.h nvcc bug (CUDA 11.4–11.6)
         try:
             major = int(subprocess.run(['gcc', '-dumpversion'], capture_output=True,
                                        text=True).stdout.strip().split('.')[0])
         except (ValueError, OSError):
-            return ''
+            return '', None
         if major <= ceiling:
-            return ''                                  # the default gcc is already acceptable
-        for k in range(ceiling, 6, -1):                # newest installed gcc-K that nvcc accepts
+            return '', None                            # the default gcc is already acceptable
+        for k in range(ceiling, 6, -1):                # newest installed gcc-K that nvcc can use
             alt = Path(f'/usr/bin/gcc-{k}')
             if alt.exists():
-                return f'-DCUDA_HOST_COMPILER={alt}'
-        return ''
+                return f'-DCUDA_HOST_COMPILER={alt}', None
+        return None, (f"CUDA needs a host gcc <= {ceiling} (default gcc is {major}), and no "
+                      f"/usr/bin/gcc-{ceiling} is installed — run `sudo apt install gcc-{ceiling} "
+                      f"g++-{ceiling}`, or set `cuda-host-compiler:` on the binding")
 
     def _gpu_cmake(self, backends):
         '''The deduped CMake flag string for a set of backends (empty = CPU-only).'''
@@ -201,8 +213,11 @@ class OpencvBuild(Driver):
                                   f"the {sdk!r} component to this binding's requires:, then sync)", 1)
         gpu_cmake = self._gpu_cmake(backends)
         if any(b in ('cuda', 'cudnn') for b in backends):
-            # steer nvcc at a gcc it supports if the default is too new (else the .cu compiles fail)
-            hc = self._cuda_host_compiler_flag()
+            # steer nvcc at a gcc it supports (default too new / gcc-11 std_function bug); fail fast
+            # with a fix if no usable host gcc is installed, rather than 20 min into a cryptic compile
+            hc, err = self._cuda_host_compiler_flag(rc)
+            if err:
+                return Result(f'(opencv-build: {err})', 1)
             if hc:
                 gpu_cmake = f'{gpu_cmake} {hc}'.strip()
         contrib = '1' if self._contrib(rc, backends) else '0'

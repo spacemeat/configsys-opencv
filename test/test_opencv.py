@@ -71,10 +71,16 @@ def test_cudnn_probe_survives_missing_paths():
 
 
 def test_cuda_host_compiler_flag_no_nvcc(monkeypatch):
-    # no nvcc on PATH -> no host-compiler override (never blocks / never guesses)
+    # no nvcc on PATH -> no host-compiler flag, no error (never blocks / never guesses)
     import shutil
     monkeypatch.setattr(shutil, 'which', lambda name: None)
-    assert _drv()._cuda_host_compiler_flag() == ''
+    assert _drv()._cuda_host_compiler_flag(_RC()) == ('', None)
+
+
+def test_cuda_host_compiler_override_wins():
+    # an explicit binding field short-circuits auto-detection (needs no nvcc)
+    rc = _RC(**{'cuda-host-compiler': '/usr/bin/gcc-10'})
+    assert _drv()._cuda_host_compiler_flag(rc) == ('-DCUDA_HOST_COMPILER=/usr/bin/gcc-10', None)
 
 
 def test_driver_registration_shape():
