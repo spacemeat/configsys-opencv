@@ -29,19 +29,45 @@
             ]
         }
 
+        // cuda-repo — set up NVIDIA's CUDA network repo (the apt/dnf source that carries cuDNN and
+        // NVIDIA's own CUDA packages). NOT needed on Arch (cuda/cudnn ship in the official repos), so
+        // it's a `requires:` on cuDNN's debian/redhat binding only. `via: script` because the repo
+        // URL is distro-codename-specific (ubuntu2204 / debian12 / rhel9 / …) — the command derives
+        // it from /etc/os-release (UBUNTU_CODENAME covers ubuntu derivatives: pop/mint/elementary/…).
+        // Debian family installs the `cuda-keyring` .deb (adds key + source list); RHEL family adds
+        // the .repo via dnf config-manager.
+        cuda-repo: {
+            description: "NVIDIA CUDA network repo (apt/dnf) — the source cuDNN & CUDA packages come from."
+            install: [
+                { via: script  when: "debian"
+                  install-cmd:   'set -e; . /etc/os-release; if [ -n "${UBUNTU_CODENAME:-}" ]; then case "$UBUNTU_CODENAME" in focal) SEG=ubuntu2004;; jammy) SEG=ubuntu2204;; noble) SEG=ubuntu2404;; *) SEG=ubuntu2204;; esac; elif [ "$ID" = debian ]; then SEG="debian${VERSION_ID%%.*}"; else SEG="${ID}$(echo "$VERSION_ID" | tr -d .)"; fi; A="$(uname -m)"; if [ "$A" = aarch64 ]; then A=sbsa; else A=x86_64; fi; T="$(mktemp -d)"; curl -fSL "https://developer.download.nvidia.com/compute/cuda/repos/$SEG/$A/cuda-keyring_1.1-1_all.deb" -o "$T/k.deb"; sudo dpkg -i "$T/k.deb"; sudo apt-get update; rm -rf "$T"'
+                  version-cmd:   'dpkg-query -W -f=${Version} cuda-keyring 2>/dev/null'
+                  version-re:    '([0-9][0-9.+-]*)'
+                  uninstall-cmd: 'sudo apt-get remove -y cuda-keyring'
+                  location:      '/etc/apt/sources.list.d/cuda-*.list (+ cuda-keyring)' }
+                { via: script  when: "redhat"
+                  install-cmd:   'set -e; . /etc/os-release; case "$ID" in fedora) SEG="fedora$VERSION_ID";; *) SEG="rhel${VERSION_ID%%.*}";; esac; A="$(uname -m)"; if [ "$A" = aarch64 ]; then A=sbsa; else A=x86_64; fi; sudo dnf config-manager --add-repo "https://developer.download.nvidia.com/compute/cuda/repos/$SEG/$A/cuda-$SEG.repo"; sudo dnf -q clean expire-cache'
+                  version-cmd:   'ls /etc/yum.repos.d/cuda-*.repo >/dev/null 2>&1 && echo present'
+                  version-re:    '(present)'
+                  uninstall-cmd: 'sudo rm -f /etc/yum.repos.d/cuda-*.repo'
+                  location:      '/etc/yum.repos.d/cuda-*.repo' }
+            ]
+        }
+
         // cuDNN — NVIDIA's deep-neural-network primitives. OpenCV's DNN CUDA backend
-        // (OPENCV_DNN_CUDA / the `cudnn` gpu token) hard-requires it. NOT in the distro repos
-        // (NVIDIA license): it comes from NVIDIA's CUDA repo. `libcudnn8-dev` is the cuDNN-8 dev
-        // package (headers + the runtime it pulls) — 8.x covers CUDA 11 and early 12; for a cuDNN-9 /
-        // CUDA-12.3+ box the package is `libcudnn9-dev-cuda-12`, swap the name per your CUDA line.
-        // `requires: cuda-toolkit` orders the toolkit first. NOTE: base configsys's cuda-toolkit is
-        // the DISTRO package (apt nvidia-cuda-toolkit), which does NOT add NVIDIA's repo — if apt
-        // can't find libcudnn8-dev, add NVIDIA's CUDA network repo (cuda-keyring) or the cudnn-local
-        // .deb first. (A `cuda-repo` helper to automate that is a natural follow-up.)
+        // (OPENCV_DNN_CUDA / the `cudnn` gpu token) hard-requires it. In Arch's official repos
+        // (pacman cudnn — no NVIDIA repo needed). On debian/redhat it's NOT in the distro repos
+        // (NVIDIA license), so the binding pulls `cuda-repo` (adds NVIDIA's source) then installs
+        // `libcudnn8-dev` — the cuDNN-8 dev package (headers + runtime), covering CUDA 11 / early 12;
+        // for a cuDNN-9 / CUDA-12.3+ box swap the name to `libcudnn9-dev-cuda-12`.
         cudnn: {
             description: "NVIDIA cuDNN — DNN primitives; OpenCV's DNN CUDA backend needs it."
             requires: cuda-toolkit
-            install: [ { via: native  when: "debian or redhat"  name: { apt: libcudnn8-dev  dnf: libcudnn8-devel } } ]
+            install: [
+                { via: native  when: "arch"  name: cudnn }                         // Arch ships it; no NVIDIA repo
+                { via: native  when: "debian or redhat"  requires: cuda-repo        // NVIDIA repo carries it
+                  name: { apt: libcudnn8-dev  dnf: libcudnn8-devel } }
+            ]
         }
     }
 }
