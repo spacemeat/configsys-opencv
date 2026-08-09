@@ -31,8 +31,38 @@ opencv: { install: [ { via: opencv-build  ref: 4.11.0  dir: opencv-git
 - **`dir`** — build-tree parent (scope-honored); holds `opencv/` (+ `opencv_contrib/`).
 - **`prefix`** — install prefix (default `~/.local`). Libraries land in `$PREFIX/lib` — add it to
   your loader path (`LD_LIBRARY_PATH` / `ldconfig`) and `$PREFIX/lib/pkgconfig` to `PKG_CONFIG_PATH`.
-- **`gpu`** — GPU backends to compile. Tokens COMPOSE; name each token's SDK in the same binding's
-  `requires:`.
+### Automatic variant selection (facets)
+
+You don't uncomment or copy a GPU binding — the right one is **auto-selected for this machine**.
+`opencv` ships four real `opencv-build` bindings (CPU / CUDA-11 / CUDA-12 / HIP), gated on two
+detected **facets** (see the base `docs/facets.md`):
+
+- **`gpu`** (vendor, from `lspci`) → `gpu:nvidia` picks a CUDA build, `gpu:amd` picks HIP, neither
+  picks the CPU source build.
+- **`cuda`** (version, from `nvcc --version`) → `cuda < 12` picks the **CUDA-11 stack** (cuDNN 8 +
+  gcc-10), `cuda >= 12` picks the **CUDA-12 stack** (cuDNN 9). Each stack has **explicit, versioned
+  dependencies** — no guessing, no install-time surprises.
+
+Native apt `opencv` stays the default; the source build is opt-in
+(`configsys pin set opencv opencv-build`), and *then* hardware picks the variant. So on your NVIDIA
++ CUDA-11 box, pinning the source build gives the CUDA-11 stack automatically.
+
+**Bootstrapping a box that doesn't have CUDA yet:** the `cuda` facet is absent, so no CUDA variant
+matches and you'd get the CPU build. **Declare your target** instead of guessing — either
+`CONFIGSYS_FACET_cuda=12` in the env, or in your config:
+
+```
+facets: { cuda: 12 }
+```
+
+Then the CUDA-12 stack resolves and configsys installs `cuda-toolkit-12` + cuDNN 9. (If a *different*
+CUDA is already installed, configsys surfaces the conflict rather than silently down-rev'ing it.)
+
+`when:` clauses only ever test **stable facts** (OS, `gpu`, `cuda`) — version-coupling lives in
+`requires:`, so there's one consistent gating model.
+
+- **`gpu`** (binding field) — GPU backends the driver compiles. Tokens COMPOSE; name each token's SDK
+  in the same binding's `requires:`.
 
   | token | CMake it adds | requires (SDK) | notes |
   | --- | --- | --- | --- |

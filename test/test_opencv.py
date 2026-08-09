@@ -86,3 +86,37 @@ def test_cuda_host_compiler_override_wins():
 def test_driver_registration_shape():
     assert opencv.OpencvBuild.name == 'opencv-build'
     assert opencv.DRIVERS == [opencv.OpencvBuild]
+
+
+# -- integration: the gpu/cuda facets auto-select the right stack variant ---------
+
+def _base_routes():
+    import configsys
+    r = pathlib.Path(configsys.__file__).resolve().parent.parent / 'routes.hu'
+    return str(r) if r.exists() else None
+
+
+@pytest.mark.skipif(_base_routes() is None, reason='base routes.hu not alongside the configsys package')
+def test_facet_selected_stack_variants(monkeypatch):
+    from configsys.routes import Resolver
+    oh = str(pathlib.Path(__file__).resolve().parent.parent / 'opencv.hu')
+
+    def stack(gpu, cuda):
+        monkeypatch.setenv('CONFIGSYS_FACET_gpu', gpu)
+        monkeypatch.setenv('CONFIGSYS_FACET_cuda', cuda)
+        r = Resolver(_base_routes(), 'ubuntu', '24.04', 'x86_64',
+                     pins={'opencv': 'opencv-build'}, plugin_files=[(oh, 'plugin')])
+        return set(r.resolve_names(['opencv']))
+
+    n11 = stack('nvidia', '11.5')                 # CUDA 11 stack: cudnn-8 + gcc-10
+    assert {'opencv-build\\opencv', 'script\\cudnn-8', 'gcc\\gcc-10'} <= n11
+    assert 'script\\cudnn-9' not in n11
+
+    n12 = stack('nvidia', '12.4')                 # CUDA 12 stack: cudnn-9 + cuda-toolkit-12, no gcc-10
+    assert {'opencv-build\\opencv', 'script\\cudnn-9', 'script\\cuda-toolkit-12'} <= n12
+    assert 'gcc\\gcc-10' not in n12 and 'script\\cudnn-8' not in n12
+
+    assert 'apt\\rocm-hip' in stack('amd', '')    # AMD -> HIP
+    cpu = stack('', '')                            # no GPU -> plain CPU source (+ cmake/git), no GPU deps
+    assert 'opencv-build\\opencv' in cpu
+    assert not any(x in k for k in cpu for x in ('cudnn', 'cuda-toolkit', 'gcc-10', 'rocm', 'cuda-repo'))

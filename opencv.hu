@@ -1,45 +1,38 @@
 {
-    // ADD a from-source build method to base configsys's `opencv`. Bindings merge additively, so
-    // this sits ALONGSIDE the core `via: native` (CPU) binding — native stays the default; the
-    // source build is opt-in with `configsys pin set opencv opencv-build`.
-    //
-    // CPU-only by default: the CPU binding below requires nothing beyond the recipe's build deps
-    // (cmake + a C++ compiler, pulled by `requires:`). To build with GPU acceleration, replace it
-    // with a `gpu:` variant AND name the matching SDK in `requires:` on the SAME binding — the
-    // driver maps the tokens to CMake flags and refuses to build if the toolchain is missing (never
-    // a silent CPU fallback). Because the SDK is a `requires:` on the GPU binding only, a CPU build
-    // never drags in something heavy like CUDA. `gpu: [ cuda ]` auto-clones opencv_contrib (the CUDA
-    // modules — cudaarithm, cudaimgproc, ... — live there). Token table + knobs are in README.md.
+    // OpenCV from-source, with GPU builds AUTO-SELECTED by hardware and CUDA stack. Bindings merge
+    // additively onto base's `opencv` — native (apt, CPU) stays the DEFAULT; the source build is
+    // opt-in with `configsys pin set opencv opencv-build`. Once opted in, the right VARIANT is
+    // picked for this machine, no editing:
+    //   - the `gpu` facet (vendor) gates nvidia -> CUDA, amd -> HIP, neither -> CPU-source;
+    //   - the `cuda` facet (version) picks the CUDA-11 vs CUDA-12 STACK, each with EXPLICIT,
+    //     self-consistent versioned deps (cudnn-8+gcc-10 vs cudnn-9). See docs/facets.md + README.
+    // `when:` only ever tests STABLE facts (OS, gpu, cuda) — version-coupling lives in `requires:`.
+    facets: {
+        gpu:  { kind: categorical  detect: "lspci"
+                match: { nvidia: "NVIDIA"  amd: "AMD/ATI" } }          // AMD/ATI = the GPU marker (AMD CPUs say "Advanced Micro Devices")
+        cuda: { kind: version  detect: "nvcc --version"  version-re: "release ([0-9]+[.0-9]*)" }
+    }
+
     components: {
         opencv: {
             install: [
-                { via: opencv-build  ref: 4.11.0  dir: opencv-git  requires: [ cmake, cpp-toolchain, git ] }
-
-                // GPU examples — replace the CPU binding above with one of these. GPU tokens compose:
-                //   cuda  = WITH_CUDA (core/imgproc/cuda* accel); needs only cuda-toolkit.
-                //   cudnn = the DNN CUDA backend; needs cuDNN AND implies cuda -> add the `cudnn`
-                //           dependency component too. `nvidia` is shorthand for [ cuda, cudnn ].
-                // `gcc-10` in requires: is the CUDA HOST compiler — nvcc for CUDA 11.4–11.6 chokes on
-                // gcc 11+'s std_function.h, so configsys installs gcc-10 and the driver points nvcc
-                // at it. On CUDA 12.x you can drop it (or require the gcc your CUDA supports); or set
-                // `cuda-host-compiler: /usr/bin/gcc-N` to override the driver's auto-pick.
-                // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ cuda ]
-                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit, gcc-10 ] }               // CUDA, no DNN backend (no cuDNN needed)
-                // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ nvidia ]
-                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit, cudnn, gcc-10 ] }         // the works: CUDA + cuDNN DNN backend
-                // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ hip ]
-                //   requires: [ cmake, cpp-toolchain, git, rocm-hip ] }                            // AMD (experimental in OpenCV)
-                // add `contrib: true` to a CPU binding to also clone opencv_contrib's extra modules
+                { via: opencv-build  ref: 4.11.0  dir: opencv-git  requires: [ cmake, cpp-toolchain, git ] }   // CPU (source) — broad fallback
+                // CUDA 11 stack: nvcc 11.4–11.6 needs gcc-10 (std_function.h bug) + cuDNN 8.
+                { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ nvidia ]  when: "gpu:nvidia and cuda < 12"
+                  requires: [ cmake, cpp-toolchain, git, cuda-toolkit, cudnn-8, gcc-10 ] }
+                // CUDA 12 stack: newer nvcc takes the default gcc (driver auto-checks) + cuDNN 9.
+                { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ nvidia ]  when: "gpu:nvidia and cuda >= 12"
+                  requires: [ cmake, cpp-toolchain, git, cuda-toolkit-12, cudnn-9 ] }
+                // AMD (experimental in OpenCV).
+                { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ hip ]  when: "gpu:amd"
+                  requires: [ cmake, cpp-toolchain, git, rocm-hip ] }
+                // add `contrib: true` to the CPU binding to also clone opencv_contrib's extra modules
             ]
         }
 
-        // cuda-repo — set up NVIDIA's CUDA network repo (the apt/dnf source that carries cuDNN and
-        // NVIDIA's own CUDA packages). NOT needed on Arch (cuda/cudnn ship in the official repos), so
-        // it's a `requires:` on cuDNN's debian/redhat binding only. `via: script` because the repo
-        // URL is distro-codename-specific (ubuntu2204 / debian12 / rhel9 / …) — the command derives
-        // it from /etc/os-release (UBUNTU_CODENAME covers ubuntu derivatives: pop/mint/elementary/…).
-        // Debian family installs the `cuda-keyring` .deb (adds key + source list); RHEL family adds
-        // the .repo via dnf config-manager.
+        // cuda-repo — set up NVIDIA's CUDA network repo (the apt/dnf source cuDNN & CUDA come from).
+        // `via: script` because the URL is distro-codename-specific; derived from /etc/os-release
+        // (UBUNTU_CODENAME covers ubuntu derivatives). Not needed on Arch (official repos).
         cuda-repo: {
             description: "NVIDIA CUDA network repo (apt/dnf) — the source cuDNN & CUDA packages come from."
             install: [
@@ -58,22 +51,38 @@
             ]
         }
 
-        // cuDNN — NVIDIA's deep-neural-network primitives. OpenCV's DNN CUDA backend
-        // (OPENCV_DNN_CUDA / the `cudnn` gpu token) hard-requires it. In Arch's official repos
-        // (pacman cudnn — no NVIDIA repo needed). On debian/redhat it's NOT in the distro repos
-        // (NVIDIA license), so the binding pulls `cuda-repo` (adds NVIDIA's source) then installs
-        // `libcudnn8-dev` — the cuDNN-8 dev package (headers + runtime), covering CUDA 11 / early 12;
-        // for a cuDNN-9 / CUDA-12.3+ box swap the name to `libcudnn9-dev-cuda-12`.
-        // debian/redhat use `via: script` (not plain native) for ONE reason: NVIDIA's libcudnn8
-        // packages skip the ldconfig trigger, so the runtime .so lands but isn't in the loader cache
-        // — the freshly-built OpenCV then can't load libcudnn.so.8 at runtime. The script installs
-        // the dev package (headers + runtime) AND runs ldconfig. Arch's pacman handles ldconfig, so
-        // it stays plain native. `requires: cuda-repo` on the deb/rpm bindings adds NVIDIA's source.
-        cudnn: {
-            description: "NVIDIA cuDNN — DNN primitives; OpenCV's DNN CUDA backend needs it."
+        // cuda-toolkit-12 — NVIDIA's CUDA 12 toolkit from their repo (base `cuda-toolkit` is the
+        // DISTRO package, often CUDA 11). Used by the CUDA-12 stack. NOTE: if the distro CUDA is
+        // already installed, this is a second toolkit — a conflict configsys surfaces, not one it
+        // silently resolves. UNVALIDATED on a real CUDA-12 box; adjust the package if needed.
+        cuda-toolkit-12: {
+            description: "NVIDIA CUDA Toolkit 12 (from NVIDIA's CUDA repo)."
+            install: [
+                { via: native  when: "arch"  name: cuda }              // Arch: rolling latest (12.x)
+                { via: script  when: "debian"  requires: cuda-repo
+                  install-cmd:   'sudo apt-get install -y cuda-toolkit-12-6 && sudo ldconfig'
+                  version-cmd:   'dpkg-query -W -f=${Version} cuda-toolkit-12-6 2>/dev/null'
+                  version-re:    '([0-9][0-9.+-]*)'
+                  uninstall-cmd: 'sudo apt-get remove -y cuda-toolkit-12-6 && sudo ldconfig'
+                  location:      'cuda-toolkit-12-6 (apt)' }
+                { via: script  when: "redhat"  requires: cuda-repo
+                  install-cmd:   'sudo dnf install -y cuda-toolkit-12-6 && sudo ldconfig'
+                  version-cmd:   'rpm -q --qf %{VERSION} cuda-toolkit-12-6 2>/dev/null'
+                  version-re:    '([0-9][0-9.+-]*)'
+                  uninstall-cmd: 'sudo dnf remove -y cuda-toolkit-12-6'
+                  location:      'cuda-toolkit-12-6 (dnf)' }
+            ]
+        }
+
+        // cuDNN, versioned. Each is an EXPLICIT, self-consistent choice a stack requires (never
+        // auto-detected at install). debian/redhat use `via: script` = install the dev package AND
+        // run ldconfig (NVIDIA's libcudnn packages skip the ldconfig trigger, so the runtime .so
+        // isn't cached and the built OpenCV can't load it). `requires: cuda-repo` adds NVIDIA's
+        // source. Arch ships one rolling `cudnn` (currently 9.x) — attached to cudnn-9.
+        cudnn-8: {
+            description: "NVIDIA cuDNN 8 — DNN primitives for the CUDA 11 line."
             requires: cuda-toolkit
             install: [
-                { via: native  when: "arch"  name: cudnn }                         // Arch ships it (pacman runs ldconfig); no NVIDIA repo
                 { via: script  when: "debian"  requires: cuda-repo
                   install-cmd:   'sudo apt-get install -y libcudnn8-dev && sudo ldconfig'
                   version-cmd:   'dpkg-query -W -f=${Version} libcudnn8-dev 2>/dev/null'
@@ -86,6 +95,25 @@
                   version-re:    '([0-9][0-9.+-]*)'
                   uninstall-cmd: 'sudo dnf remove -y libcudnn8-devel && sudo ldconfig'
                   location:      'libcudnn8-devel (dnf) + ldconfig cache' }
+            ]
+        }
+        cudnn-9: {
+            description: "NVIDIA cuDNN 9 — DNN primitives for the CUDA 12 line."
+            requires: cuda-toolkit-12
+            install: [
+                { via: native  when: "arch"  name: cudnn }             // Arch's rolling cudnn (9.x); pacman runs ldconfig
+                { via: script  when: "debian"  requires: cuda-repo
+                  install-cmd:   'sudo apt-get install -y libcudnn9-dev-cuda-12 && sudo ldconfig'
+                  version-cmd:   'dpkg-query -W -f=${Version} libcudnn9-dev-cuda-12 2>/dev/null'
+                  version-re:    '([0-9][0-9.+-]*)'
+                  uninstall-cmd: 'sudo apt-get remove -y libcudnn9-dev-cuda-12 && sudo ldconfig'
+                  location:      'libcudnn9-dev-cuda-12 (apt) + ldconfig cache' }
+                { via: script  when: "redhat"  requires: cuda-repo
+                  install-cmd:   'sudo dnf install -y libcudnn9-devel-cuda-12 && sudo ldconfig'
+                  version-cmd:   'rpm -q --qf %{VERSION} libcudnn9-devel-cuda-12 2>/dev/null'
+                  version-re:    '([0-9][0-9.+-]*)'
+                  uninstall-cmd: 'sudo dnf remove -y libcudnn9-devel-cuda-12 && sudo ldconfig'
+                  location:      'libcudnn9-devel-cuda-12 (dnf) + ldconfig cache' }
             ]
         }
     }
