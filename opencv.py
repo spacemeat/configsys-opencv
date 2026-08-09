@@ -153,8 +153,9 @@ class OpencvBuild(Driver):
             if alt.exists():
                 return f'-DCUDA_HOST_COMPILER={alt}', None
         return None, (f"CUDA needs a host gcc <= {ceiling} (default gcc is {major}), and no "
-                      f"/usr/bin/gcc-{ceiling} is installed — run `sudo apt install gcc-{ceiling} "
-                      f"g++-{ceiling}`, or set `cuda-host-compiler:` on the binding")
+                      f"/usr/bin/gcc-{ceiling} is installed — add the `gcc-{ceiling}` component to "
+                      f"this binding's requires: (configsys installs it), or set `cuda-host-compiler:` "
+                      f"on the binding")
 
     def _gpu_cmake(self, backends):
         '''The deduped CMake flag string for a set of backends (empty = CPU-only).'''

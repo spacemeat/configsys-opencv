@@ -19,12 +19,16 @@
                 //   cuda  = WITH_CUDA (core/imgproc/cuda* accel); needs only cuda-toolkit.
                 //   cudnn = the DNN CUDA backend; needs cuDNN AND implies cuda -> add the `cudnn`
                 //           dependency component too. `nvidia` is shorthand for [ cuda, cudnn ].
+                // `gcc-10` in requires: is the CUDA HOST compiler — nvcc for CUDA 11.4–11.6 chokes on
+                // gcc 11+'s std_function.h, so configsys installs gcc-10 and the driver points nvcc
+                // at it. On CUDA 12.x you can drop it (or require the gcc your CUDA supports); or set
+                // `cuda-host-compiler: /usr/bin/gcc-N` to override the driver's auto-pick.
                 // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ cuda ]
-                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit ] }               // CUDA, no DNN backend (no cuDNN needed)
+                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit, gcc-10 ] }               // CUDA, no DNN backend (no cuDNN needed)
                 // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ nvidia ]
-                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit, cudnn ] }         // the works: CUDA + cuDNN DNN backend
+                //   requires: [ cmake, cpp-toolchain, git, cuda-toolkit, cudnn, gcc-10 ] }         // the works: CUDA + cuDNN DNN backend
                 // { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ hip ]
-                //   requires: [ cmake, cpp-toolchain, git, rocm-hip ] }                    // AMD (experimental in OpenCV)
+                //   requires: [ cmake, cpp-toolchain, git, rocm-hip ] }                            // AMD (experimental in OpenCV)
                 // add `contrib: true` to a CPU binding to also clone opencv_contrib's extra modules
             ]
         }
