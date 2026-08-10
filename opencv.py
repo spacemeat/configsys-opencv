@@ -69,6 +69,11 @@ class OpencvBuild(Driver):
     default_scope = 'user'
     honors_scope = False        # single build tree; rebuild for a different scope by hand
 
+    # Default GPU backends when the binding names none. The base driver is CPU-only; the pinnable
+    # variant subclasses below preset a vendor so the flavor is chosen by WHICH via you pin
+    # (`opencv-cuda12`, `opencv-hip`, …) — a binding-level `gpu:` still overrides.
+    gpu_preset = ()
+
     def _build_dir(self, rc):
         return self.scoped_dir(rc.fields.get('dir') or 'opencv-git', rc)
 
@@ -90,7 +95,7 @@ class OpencvBuild(Driver):
     def _gpu_backends(self, rc):
         '''The `gpu:` field expanded to canonical tokens (aliases resolved, deduped, order kept).
         Raises ValueError on an unknown token.'''
-        raw = rc.fields.get('gpu') or []
+        raw = rc.fields.get('gpu') or list(self.gpu_preset)
         if isinstance(raw, str):
             raw = [raw]
         out = []
@@ -248,4 +253,21 @@ class OpencvBuild(Driver):
         return str(self._build_dir(rc))
 
 
-DRIVERS = [OpencvBuild]
+# Pinnable build flavors — each a distinct `via:` (install method) on the one `opencv` component,
+# so `configsys pin opencv opencv-cuda12` selects it. All share the build logic; they differ in the
+# default backend set (a binding `gpu:` still wins) and, in the .hu, their `when:`/`requires:`. The
+# CUDA-11 vs -12 split is which cuDNN/toolkit STACK gets pulled — the via names carry it.
+class OpencvCuda11(OpencvBuild):
+    name = 'opencv-cuda11'
+    gpu_preset = ('nvidia',)        # nvidia -> cuda + cudnn
+
+class OpencvCuda12(OpencvBuild):
+    name = 'opencv-cuda12'
+    gpu_preset = ('nvidia',)
+
+class OpencvHip(OpencvBuild):
+    name = 'opencv-hip'
+    gpu_preset = ('amd',)           # amd -> hip
+
+
+DRIVERS = [OpencvBuild, OpencvCuda11, OpencvCuda12, OpencvHip]

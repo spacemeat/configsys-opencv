@@ -1,32 +1,41 @@
 {
-    // OpenCV from-source, with GPU builds AUTO-SELECTED by hardware and CUDA stack. Bindings merge
-    // additively onto base's `opencv` — native (apt, CPU) stays the DEFAULT; the source build is
-    // opt-in with `configsys pin set opencv opencv-build`. Once opted in, the right VARIANT is
-    // picked for this machine, no editing:
-    //   - the `gpu` facet (vendor) gates nvidia -> CUDA, amd -> HIP, neither -> CPU-source;
-    //   - the `cuda` facet (version) picks the CUDA-11 vs CUDA-12 STACK, each with EXPLICIT,
-    //     self-consistent versioned deps (cudnn-8+gcc-10 vs cudnn-9). See docs/facets.md + README.
-    // `when:` only ever tests STABLE facts (OS, gpu, cuda) — version-coupling lives in `requires:`.
-    // The `gpu` facet (vendor) now lives in BASE routes.hu (shared by every GPU-building plugin);
-    // this only adds the opencv-specific `cuda` version facet that picks the CUDA-11 vs -12 stack.
+    // OpenCV from-source as pinnable methods on base's `opencv` (see the components comment below).
+    // The vendor `gpu` facet lives in BASE routes.hu (shared); this adds only the opencv-specific
+    // `cuda` version facet, which the CUDA methods' `when:` uses to offer the matching stack
+    // (CUDA-11: cuDNN 8 + gcc-10, vs CUDA-12: cuDNN 9). See docs/facets.md + README.
     facets: {
         cuda: { kind: version  detect: "nvcc --version"  version-re: "release ([0-9]+[.0-9]*)" }
     }
 
+    // From-source OpenCV, ADDED as pinnable install methods on base configsys's `opencv`. Base's
+    // native package stays the DEFAULT — nothing auto-builds. Each variant is its OWN `via:` (a thin
+    // subclass of the one build driver, presetting the backend), so you choose by PINNING a method:
+    //
+    //   configsys pin opencv opencv-build     # CPU-only source build (works anywhere)
+    //   configsys pin opencv opencv-cuda12    # CUDA 12 stack (cuDNN 9) — nvidia + CUDA >= 12
+    //   configsys pin opencv opencv-cuda11    # CUDA 11 stack (cuDNN 8 + gcc-10) — nvidia + CUDA < 12
+    //   configsys pin opencv opencv-hip       # AMD ROCm/HIP (experimental in OpenCV)
+    //   configsys pin opencv native           # back to the distro package
+    //
+    // The GPU methods keep a `when:` on the hardware they need (the `gpu` + `cuda` facets), so the
+    // Components screen only offers the ones valid on THIS machine — on an nvidia+CUDA-12 box you see
+    // opencv-cuda12, not opencv-cuda11/opencv-hip. (Profiles shows all, for cross-machine authoring.)
+    // `when:` tests STABLE facts only; the exact cuDNN/toolkit versions live in each method's
+    // `requires:`. `configsys where opencv` lists the methods valid here.
     components: {
         opencv: {
             install: [
-                { via: opencv-build  ref: 4.11.0  dir: opencv-git  requires: [ cmake, cpp-toolchain, git ] }   // CPU (source) — broad fallback
+                { via: opencv-build   ref: 4.11.0  dir: opencv-git  requires: [ cmake, cpp-toolchain, git ] }   // CPU (source)
                 // CUDA 11 stack: nvcc 11.4–11.6 needs gcc-10 (std_function.h bug) + cuDNN 8.
-                { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ nvidia ]  when: "gpu:nvidia and cuda < 12"
+                { via: opencv-cuda11  ref: 4.11.0  dir: opencv-git  when: "gpu:nvidia and cuda < 12"
                   requires: [ cmake, cpp-toolchain, git, cuda-toolkit, cudnn-8, gcc-10 ] }
                 // CUDA 12 stack: newer nvcc takes the default gcc (driver auto-checks) + cuDNN 9.
-                { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ nvidia ]  when: "gpu:nvidia and cuda >= 12"
+                { via: opencv-cuda12  ref: 4.11.0  dir: opencv-git  when: "gpu:nvidia and cuda >= 12"
                   requires: [ cmake, cpp-toolchain, git, cuda-toolkit-12, cudnn-9 ] }
                 // AMD (experimental in OpenCV).
-                { via: opencv-build  ref: 4.11.0  dir: opencv-git  gpu: [ hip ]  when: "gpu:amd"
+                { via: opencv-hip     ref: 4.11.0  dir: opencv-git  when: "gpu:amd"
                   requires: [ cmake, cpp-toolchain, git, rocm-hip ] }
-                // add `contrib: true` to the CPU binding to also clone opencv_contrib's extra modules
+                // add `contrib: true` to a binding to also clone opencv_contrib's extra modules
             ]
         }
 

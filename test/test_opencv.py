@@ -83,12 +83,25 @@ def test_cuda_host_compiler_override_wins():
     assert _drv()._cuda_host_compiler_flag(rc) == ('-DCUDA_HOST_COMPILER=/usr/bin/gcc-10', None)
 
 
+def _variant(name):
+    cls = next(d for d in opencv.DRIVERS if d.name == name)
+    return cls.__new__(cls)
+
+
 def test_driver_registration_shape():
     assert opencv.OpencvBuild.name == 'opencv-build'
-    assert opencv.DRIVERS == [opencv.OpencvBuild]
+    # one pinnable via per variant
+    assert [d.name for d in opencv.DRIVERS] == [
+        'opencv-build', 'opencv-cuda11', 'opencv-cuda12', 'opencv-hip']
+    # each variant via presets its backend set (a binding `gpu:` still overrides)
+    assert _variant('opencv-build')._gpu_backends(_RC()) == []
+    assert _variant('opencv-cuda11')._gpu_backends(_RC()) == ['cuda', 'cudnn']
+    assert _variant('opencv-cuda12')._gpu_backends(_RC()) == ['cuda', 'cudnn']
+    assert _variant('opencv-hip')._gpu_backends(_RC()) == ['hip']
+    assert _variant('opencv-cuda12')._gpu_backends(_RC(gpu=['hip'])) == ['hip']   # override
 
 
-# -- integration: the gpu/cuda facets auto-select the right stack variant ---------
+# -- integration: each stack variant is its own pinnable via ----------------------
 
 def _base_routes():
     import configsys
@@ -97,26 +110,26 @@ def _base_routes():
 
 
 @pytest.mark.skipif(_base_routes() is None, reason='base routes.hu not alongside the configsys package')
-def test_facet_selected_stack_variants(monkeypatch):
+def test_pinned_stack_variants(monkeypatch):
     from configsys.routes import Resolver
     oh = str(pathlib.Path(__file__).resolve().parent.parent / 'opencv.hu')
 
-    def stack(gpu, cuda):
+    def stack(via, gpu, cuda):
         monkeypatch.setenv('CONFIGSYS_FACET_gpu', gpu)
         monkeypatch.setenv('CONFIGSYS_FACET_cuda', cuda)
         r = Resolver(_base_routes(), 'ubuntu', '24.04', 'x86_64',
-                     pins={'opencv': 'opencv-build'}, plugin_files=[(oh, 'plugin')])
+                     pins={'opencv': via}, plugin_files=[(oh, 'plugin')])
         return set(r.resolve_names(['opencv']))
 
-    n11 = stack('nvidia', '11.5')                 # CUDA 11 stack: cudnn-8 + gcc-10
-    assert {'opencv-build\\opencv', 'script\\cudnn-8', 'gcc\\gcc-10'} <= n11
+    n11 = stack('opencv-cuda11', 'nvidia', '11.5')   # CUDA 11 stack: cudnn-8 + gcc-10
+    assert {'opencv-cuda11\\opencv', 'script\\cudnn-8', 'gcc\\gcc-10'} <= n11
     assert 'script\\cudnn-9' not in n11
 
-    n12 = stack('nvidia', '12.4')                 # CUDA 12 stack: cudnn-9 + cuda-toolkit-12, no gcc-10
-    assert {'opencv-build\\opencv', 'script\\cudnn-9', 'script\\cuda-toolkit-12'} <= n12
+    n12 = stack('opencv-cuda12', 'nvidia', '12.4')   # CUDA 12 stack: cudnn-9 + cuda-toolkit-12, no gcc-10
+    assert {'opencv-cuda12\\opencv', 'script\\cudnn-9', 'script\\cuda-toolkit-12'} <= n12
     assert 'gcc\\gcc-10' not in n12 and 'script\\cudnn-8' not in n12
 
-    assert 'apt\\rocm-hip' in stack('amd', '')    # AMD -> HIP
-    cpu = stack('', '')                            # no GPU -> plain CPU source (+ cmake/git), no GPU deps
+    assert 'apt\\rocm-hip' in stack('opencv-hip', 'amd', '')    # AMD -> HIP
+    cpu = stack('opencv-build', '', '')            # no GPU -> plain CPU source (+ cmake/git), no GPU deps
     assert 'opencv-build\\opencv' in cpu
     assert not any(x in k for k in cpu for x in ('cudnn', 'cuda-toolkit', 'gcc-10', 'rocm', 'cuda-repo'))

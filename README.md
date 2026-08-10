@@ -1,10 +1,18 @@
 # configsys-opencv — a from-source, GPU-capable OpenCV build
 
-A [configsys](https://github.com/spacemeat/configsys) **code plugin** that adds a build-from-source
-method to the base `opencv` component, with optional **CUDA** (or experimental **HIP**) GPU support
+A [configsys](https://github.com/spacemeat/configsys) **code plugin** that adds build-from-source
+methods to the base `opencv` component, with optional **CUDA** (or experimental **HIP**) GPU support
 and `opencv_contrib` for the CUDA modules. Base configsys ships `opencv` as a CPU-only *native*
-package; this plugin **adds** a `via: opencv-build` binding — `native` stays the default, so loading
-the plugin never changes a resolution. You pick the GPU build explicitly.
+package; this plugin **adds** a pinnable method per variant (CPU / CUDA-11 / CUDA-12 / HIP) — all
+under `opencv`, with `native` staying the default. Loading the plugin never changes a resolution;
+you pick a source build explicitly with a pin:
+
+```console
+$ configsys where opencv        # methods valid HERE, e.g. on nvidia + CUDA 12:
+                                #   native (default), opencv-build (CPU), opencv-cuda12
+$ configsys pin opencv opencv-cuda12
+$ configsys install opencv      # CUDA-12 stack from source (cuDNN 9, opencv_contrib)
+```
 
 It follows the [configsys-blender](https://github.com/spacemeat/configsys-blender) /
 configsys-kicad pattern: GPU-SDK builds are exactly the "gnarly" case the general `configsys-source`
@@ -15,8 +23,8 @@ plugin bars, so OpenCV+CUDA gets its own small orchestration driver.
 | File | Role |
 | --- | --- |
 | `plugin.hu` | manifest — `provides.drivers: [opencv-build]`, `code: opencv.py`, `data: opencv.hu` |
-| `opencv.hu` | adds the `via: opencv-build` binding to base's `opencv` (CPU default + GPU examples) |
-| `opencv.py` | the `opencv-build` driver — maps `gpu:` to CMake flags, validates the toolchain |
+| `opencv.hu` | adds the per-variant methods to base's `opencv` (CPU / CUDA-11 / CUDA-12 / HIP) |
+| `opencv.py` | the `opencv-build` driver + thin per-variant subclasses — maps `gpu:` to CMake flags, validates the toolchain |
 | `build-opencv.sh` | the recipe: clone opencv (+ opencv_contrib), Release CMake build, install |
 | `test/` | the driver's pure-logic unit tests |
 
@@ -31,35 +39,40 @@ opencv: { install: [ { via: opencv-build  ref: 4.11.0  dir: opencv-git
 - **`dir`** — build-tree parent (scope-honored); holds `opencv/` (+ `opencv_contrib/`).
 - **`prefix`** — install prefix (default `~/.local`). Libraries land in `$PREFIX/lib` — add it to
   your loader path (`LD_LIBRARY_PATH` / `ldconfig`) and `$PREFIX/lib/pkgconfig` to `PKG_CONFIG_PATH`.
-### Automatic variant selection (facets)
+### The variant methods (pin one)
 
-You don't uncomment or copy a GPU binding — the right one is **auto-selected for this machine**.
-`opencv` ships four real `opencv-build` bindings (CPU / CUDA-11 / CUDA-12 / HIP), gated on two
-detected **facets** (see the base `docs/facets.md`):
+Each variant is its own `via:` (a thin subclass of the build driver, presetting the backend), so you
+choose by **pinning** — no uncommenting, no copying bindings:
 
-- **`gpu`** (vendor) → `gpu:nvidia` picks a CUDA build, `gpu:amd` picks HIP, neither picks the CPU
-  source build. Detected via `lspci` (from **pciutils** — present on ~every workstation, but not
-  minimal images/containers); if `lspci` is absent it falls back to `nvidia-smi`/`rocminfo`. If
-  detection ever misfires, override it: `facets: { gpu: nvidia }` in the config, or
-  `CONFIGSYS_FACET_gpu=nvidia`.
-- **`cuda`** (version, from `nvcc --version`) → `cuda < 12` picks the **CUDA-11 stack** (cuDNN 8 +
-  gcc-10), `cuda >= 12` picks the **CUDA-12 stack** (cuDNN 9). Each stack has **explicit, versioned
-  dependencies** — no guessing, no install-time surprises.
+| `via:` | preset | `requires:` (the stack) | `when:` (where it's offered) |
+| --- | --- | --- | --- |
+| `opencv-build` | CPU | cmake, cpp-toolchain, git | anywhere |
+| `opencv-cuda11` | CUDA + cuDNN | + cuda-toolkit, **cuDNN 8**, **gcc-10** | `gpu:nvidia and cuda < 12` |
+| `opencv-cuda12` | CUDA + cuDNN | + cuda-toolkit-12, **cuDNN 9** | `gpu:nvidia and cuda >= 12` |
+| `opencv-hip` | HIP | + rocm-hip | `gpu:amd` |
 
-Native apt `opencv` stays the default; the source build is opt-in
-(`configsys pin set opencv opencv-build`), and *then* hardware picks the variant. So on your NVIDIA
-+ CUDA-11 box, pinning the source build gives the CUDA-11 stack automatically.
+The GPU methods keep a `when:` on the hardware they need — the two detected **facets** (see the base
+`docs/facets.md`):
 
-**Bootstrapping a box that doesn't have CUDA yet:** the `cuda` facet is absent, so no CUDA variant
-matches and you'd get the CPU build. **Declare your target** instead of guessing — either
-`CONFIGSYS_FACET_cuda=12` in the env, or in your config:
+- **`gpu`** (vendor) — `lspci` (from **pciutils**; falls back to `nvidia-smi`/`rocminfo` on minimal
+  images). Override if it misfires: `facets: { gpu: nvidia }` or `CONFIGSYS_FACET_gpu=nvidia`.
+- **`cuda`** (version, from `nvcc --version`) — routes you to the CUDA-11 vs CUDA-12 stack.
+
+Because the methods carry `when:`, the **Components** screen only offers the ones valid on this
+machine (on an NVIDIA + CUDA-12 box: `native`, `opencv-build`, `opencv-cuda12`). The **Profiles**
+screen lists them all, marking the ones not available here — you may be authoring for another
+machine. `native` apt `opencv` stays the default; nothing builds until you pin a source method.
+
+**Bootstrapping a box that doesn't have CUDA yet:** with no `nvcc`, the `cuda` facet is absent, so
+neither CUDA method is offered. **Declare your target** — `CONFIGSYS_FACET_cuda=12` in the env, or:
 
 ```
 facets: { cuda: 12 }
 ```
 
-Then the CUDA-12 stack resolves and configsys installs `cuda-toolkit-12` + cuDNN 9. (If a *different*
-CUDA is already installed, configsys surfaces the conflict rather than silently down-rev'ing it.)
+Then `opencv-cuda12` becomes available; pin it and configsys installs `cuda-toolkit-12` + cuDNN 9.
+(If a *different* CUDA is already installed, configsys surfaces the conflict rather than silently
+down-rev'ing it.)
 
 `when:` clauses only ever test **stable facts** (OS, `gpu`, `cuda`) — version-coupling lives in
 `requires:`, so there's one consistent gating model.
