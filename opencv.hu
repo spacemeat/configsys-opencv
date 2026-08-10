@@ -7,10 +7,9 @@
     //   - the `cuda` facet (version) picks the CUDA-11 vs CUDA-12 STACK, each with EXPLICIT,
     //     self-consistent versioned deps (cudnn-8+gcc-10 vs cudnn-9). See docs/facets.md + README.
     // `when:` only ever tests STABLE facts (OS, gpu, cuda) — version-coupling lives in `requires:`.
+    // The `gpu` facet (vendor) now lives in BASE routes.hu (shared by every GPU-building plugin);
+    // this only adds the opencv-specific `cuda` version facet that picks the CUDA-11 vs -12 stack.
     facets: {
-        gpu:  { kind: categorical                                     // AMD/ATI = the GPU marker (AMD CPUs also say "Advanced Micro Devices")
-                detect: 'lspci 2>/dev/null || { command -v nvidia-smi >/dev/null 2>&1 && echo NVIDIA; command -v rocminfo >/dev/null 2>&1 && echo "AMD/ATI"; }'
-                match: { nvidia: "NVIDIA"  amd: "AMD/ATI" } }          // lspci (pciutils) preferred; falls back to the driver tools if it's absent (containers/minimal). Override with facets:{gpu:…} / CONFIGSYS_FACET_gpu.
         cuda: { kind: version  detect: "nvcc --version"  version-re: "release ([0-9]+[.0-9]*)" }
     }
 
