@@ -123,10 +123,15 @@ down-rev'ing it.)
 ```sh
 configsys plugin add github:spacemeat/configsys-opencv    # or a local path / file: source
 configsys plugin trust configsys-opencv                   # it runs code, so trust is required
-configsys pin set opencv opencv-build                      # opt into the source build (native is default)
-# edit the opencv binding in your config to add `gpu: [ cuda ]  requires: [ ..., cuda-toolkit ]`
+configsys pin opencv opencv-cuda12                         # pick a variant (native is the default)
 configsys install opencv
 ```
+
+`get_version` reports installed **only for the variant actually built**: each build stamps a
+`.configsys-variant` marker (its via + backends), and a hand-built tree is best-effort probed
+(`cvconfig.h` HAVE_CUDA/HAVE_HIP + the linked cuDNN soname). So `configsys versions opencv` names the
+built variant, and — even unpinned — `configsys inspect` surfaces it as *"also present"*. Built OpenCV
+somewhere nonstandard? `locations: { opencv: /path/to/opencv-git }` in your config points at it.
 
 ## Status
 

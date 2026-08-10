@@ -109,6 +109,51 @@ def _base_routes():
     return str(r) if r.exists() else None
 
 
+def test_variant_marker_discriminates_get_version():
+    from configsys.runner import Result
+
+    class Fake:
+        '''A built opencv whose marker records `via=<marked>`.'''
+        def __init__(self, marked):
+            self.marked = marked
+
+        def run(self, cmd, **kw):
+            if cmd.startswith('ls ') and 'libopencv_core' in cmd:
+                return Result(cmd, 0, stdout='libopencv_core.so.4.11\n')
+            if cmd.startswith('cat ') and '.configsys-variant' in cmd:
+                return Result(cmd, 0, stdout=f'via={self.marked}\ngpu=x\n')
+            if 'describe' in cmd:
+                return Result(cmd, 0, stdout='4.11.0\n')
+            return Result(cmd, 0)
+
+    for marked, winner in (('opencv-cuda12', 'opencv-cuda12'), ('opencv-build', 'opencv-build')):
+        for cls in opencv.DRIVERS:
+            v = cls(Fake(marked)).get_version(_RC(dir='opencv-git'))
+            assert (v == '4.11.0') == (cls.name == winner), (cls.name, marked, v)
+
+
+def test_probe_variant_from_cvconfig():
+    from configsys.runner import Result
+
+    class Cfg:
+        '''No marker; cvconfig.h defines HAVE_CUDA and a cuda module links libcudnn.so.9 -> cuda12.'''
+        def run(self, cmd, **kw):
+            if cmd.startswith('ls ') and 'libopencv_core' in cmd:
+                return Result(cmd, 0, stdout='libopencv_core.so\n')
+            if cmd.startswith('cat '):
+                return Result(cmd, 1)                        # no marker
+            if 'grep -q "define HAVE_HIP"' in cmd:
+                return Result(cmd, 1)
+            if 'grep -q "define HAVE_CUDA"' in cmd or 'grep -q "define HAVE_CUDNN"' in cmd:
+                return Result(cmd, 0)
+            if cmd.startswith('ldd '):
+                return Result(cmd, 0, stdout='libcudnn.so.9 => /lib/libcudnn.so.9\n')
+            return Result(cmd, 0)
+
+    d = next(c for c in opencv.DRIVERS if c.name == 'opencv-build')(Cfg())
+    assert d.detected_variant(_RC(dir='opencv-git')) == 'opencv-cuda12'
+
+
 @pytest.mark.skipif(_base_routes() is None, reason='base routes.hu not alongside the configsys package')
 def test_pinned_stack_variants(monkeypatch):
     from configsys.routes import Resolver

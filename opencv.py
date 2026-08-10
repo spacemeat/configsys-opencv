@@ -75,7 +75,8 @@ class OpencvBuild(Driver):
     gpu_preset = ()
 
     def _build_dir(self, rc):
-        return self.scoped_dir(rc.fields.get('dir') or 'opencv-git', rc)
+        # a config `locations:` override (absolute) points straight at the build tree, scope-bypassing
+        return self.location_override(rc) or self.scoped_dir(rc.fields.get('dir') or 'opencv-git', rc)
 
     def _prefix(self, rc):
         p = rc.fields.get('prefix')
@@ -181,13 +182,70 @@ class OpencvBuild(Driver):
 
     # -- read -------------------------------------------------------------
 
+    # -- variant identity -------------------------------------------------
+
+    def _variant_marker(self, rc):
+        return self._build_dir(rc) / '.configsys-variant'
+
+    def _write_variant_marker(self, rc, backends):
+        content = f'via={self.name}\ngpu={",".join(backends)}\n'
+        self.runner.run(f'printf %s {shlex.quote(content)} > '
+                        f'{shlex.quote(str(self._variant_marker(rc)))}')
+
+    def _read_variant_marker(self, rc):
+        r = self.runner.run(f'cat {shlex.quote(str(self._variant_marker(rc)))} 2>/dev/null')
+        if not r.ok:
+            return None
+        for line in r.stdout.splitlines():
+            if line.startswith('via='):
+                return line[len('via='):].strip() or None
+        return None
+
+    def _probe_variant(self, rc):
+        '''Best-effort variant from build ARTIFACTS (no marker): the generated cvconfig.h's
+        HAVE_CUDA/HAVE_CUDNN/HAVE_HIP, then cuda11-vs-12 by the linked cuDNN soname (libcudnn.so.8
+        vs .9). Imperfect (soname may be absent) -> defaults the ambiguous CUDA case to cuda12.'''
+        build = self._build_dir(rc) / 'opencv' / 'build'
+        cfg = shlex.quote(str(build / 'cvconfig.h'))
+
+        def have(macro):
+            return self.runner.run(f'grep -q "define {macro}" {cfg} 2>/dev/null').ok
+        if have('HAVE_HIP'):
+            return 'opencv-hip'
+        if have('HAVE_CUDA') or have('HAVE_CUDNN'):
+            libs = shlex.quote(str(build / 'lib')) + '/libopencv_cuda*.so*'
+            blob = self.runner.run(f'ldd {libs} 2>/dev/null')
+            out = blob.stdout if (blob and blob.ok) else ''
+            if 'libcudnn.so.8' in out:
+                return 'opencv-cuda11'
+            if 'libcudnn.so.9' in out:
+                return 'opencv-cuda12'
+            return 'opencv-cuda12'          # CUDA present, version indeterminate -> best guess
+        return 'opencv-build'
+
+    def detected_variant(self, rc):
+        '''The via of the variant actually built at the build tree: the stamped marker
+        (authoritative) -> a best-effort artifact probe -> 'unknown' (built but unidentifiable) /
+        None (nothing built). Used by variant-aware get_version and the coexistence detector.'''
+        lib = self._build_dir(rc) / 'opencv' / 'build' / 'lib'
+        r = self.runner.run(f'ls {shlex.quote(str(lib))}/libopencv_core.so* 2>/dev/null')
+        if not (r and r.ok and r.stdout.strip()):
+            return None
+        return self._read_variant_marker(rc) or self._probe_variant(rc) or 'unknown'
+
     def get_version(self, rc):
-        '''"installed" = a built libopencv_core*.so exists in the build tree. The version is what the
-        source is checked out at (`git describe --tags`) — for a tag build that equals get_latest.'''
+        '''Installed version — but only for the variant THIS via represents. The build tree holds
+        one build; `detected_variant` names it (marker, else cvconfig/cuDNN probe). This via reports
+        the version only if it matches; the base (CPU) via also claims an unidentifiable build.
+        Version is `git describe --tags` (tag build => matches get_latest => "up to date").'''
         root = self._build_dir(rc)
         lib = root / 'opencv' / 'build' / 'lib'
         r = self.runner.run(f'ls {shlex.quote(str(lib))}/libopencv_core.so* 2>/dev/null')
         if not (r and r.ok and r.stdout.strip()):
+            return None
+        dv = self.detected_variant(rc)
+        is_base = not self.gpu_preset
+        if not (dv == self.name or (is_base and dv in (None, 'unknown'))):
             return None
         src = root / 'opencv'
         d = self.runner.run(f'git -C {shlex.quote(str(src))} describe --tags')
@@ -231,8 +289,11 @@ class OpencvBuild(Driver):
         d = shlex.quote(str(self._build_dir(rc)))
         prefix = shlex.quote(str(self._prefix(rc)))
         env = f'GPU_CMAKE={shlex.quote(gpu_cmake)} ' if gpu_cmake else ''
-        return self.runner.run(
+        res = self.runner.run(
             f'{env}bash {shlex.quote(str(script))} {ref} {d} {prefix} {contrib}', capture=False)
+        if res.ok:
+            self._write_variant_marker(rc, backends)   # stamp which variant this build IS
+        return res
 
     def upgrade(self, rc):
         return self.install(rc)   # fetch + checkout + rebuild
