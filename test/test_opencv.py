@@ -166,13 +166,14 @@ def test_pinned_stack_variants(monkeypatch):
                      pins={'opencv': via}, plugin_files=[(oh, 'plugin')])
         return set(r.resolve_names(['opencv']))
 
-    n11 = stack('opencv-cuda11', 'nvidia', '11.5')   # CUDA 11 stack: cudnn-8 + gcc-10
-    assert {'opencv-cuda11\\opencv', 'script\\cudnn-8', 'gcc\\gcc-10'} <= n11
-    assert 'script\\cudnn-9' not in n11
+    n11 = stack('opencv-cuda11', 'nvidia', '11.5')   # CUDA 11 stack: cuda-toolkit-11 + cudnn-8 + gcc-10
+    assert {'opencv-cuda11\\opencv', 'apt\\cuda-toolkit-11', 'script\\cudnn-8', 'gcc\\gcc-10'} <= n11
+    assert 'script\\cudnn-9' not in n11 and 'script\\cuda-toolkit-12' not in n11
 
-    n12 = stack('opencv-cuda12', 'nvidia', '12.4')   # CUDA 12 stack: cudnn-9 + cuda-toolkit-12, no gcc-10
+    n12 = stack('opencv-cuda12', 'nvidia', '12.4')   # CUDA 12 stack: cuda-toolkit-12 + cudnn-9, no gcc-10
     assert {'opencv-cuda12\\opencv', 'script\\cudnn-9', 'script\\cuda-toolkit-12'} <= n12
     assert 'gcc\\gcc-10' not in n12 and 'script\\cudnn-8' not in n12
+    assert 'apt\\cuda-toolkit-11' not in n12                       # -11 is opt-in; only the 11 stack names it
 
     assert 'apt\\rocm-hip' in stack('opencv-hip', 'amd', '')    # AMD -> HIP
     cpu = stack('opencv-build', '', '')            # no GPU -> plain CPU source (+ cmake/git), no GPU deps

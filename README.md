@@ -47,8 +47,14 @@ choose by **pinning** — no uncommenting, no copying bindings:
 | `via:` | preset | `requires:` (the stack) | `when:` (where it's offered) |
 | --- | --- | --- | --- |
 | `opencv-build` | CPU | cmake, cpp-toolchain, git | anywhere |
-| `opencv-cuda11` | CUDA + cuDNN | + cuda-toolkit, **cuDNN 8**, **gcc-10** | `gpu:nvidia and cuda < 12` |
+| `opencv-cuda11` | CUDA + cuDNN | + cuda-toolkit-11, **cuDNN 8**, **gcc-10** | `gpu:nvidia and cuda < 12` |
 | `opencv-cuda12` | CUDA + cuDNN | + cuda-toolkit-12, **cuDNN 9** | `gpu:nvidia and cuda >= 12` |
+
+The CUDA toolkits (`cuda-toolkit-11` / `cuda-toolkit-12`), `cuda-repo`, and cuDNN (`cudnn-8` /
+`cudnn-9`) live in **base configsys** (`routes.hu`) — they're general-purpose, not OpenCV-specific.
+Both toolkits `provides: cuda-toolkit` (a generic capability); `-12` is the default provider and
+`-11` is opt-in, pulled only when a stack names it. This plugin adds only the OpenCV build variants
+and the `cuda` version facet.
 | `opencv-hip` | HIP | + rocm-hip | `gpu:amd` |
 
 The GPU methods keep a `when:` on the hardware they need — the two detected **facets** (see the base
