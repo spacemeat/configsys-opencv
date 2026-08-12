@@ -41,6 +41,17 @@ if [ "$CONTRIB" = "1" ]; then
     EXTRA="-DOPENCV_EXTRA_MODULES_PATH=$DIR/opencv_contrib/modules"
 fi
 
+# A MOVED build tree (e.g. ~/opencv-git -> ~/src/opencv-git when configsys switched to
+# $CONFIGSYS_SRC_DIR) leaves CMakeCache.txt pointing at the old absolute source dir, so cmake refuses
+# ("does not match the source used to generate cache"). Wipe the whole build dir for a clean
+# reconfigure when the cached source no longer matches.
+if [ -f "$DIR/opencv/build/CMakeCache.txt" ]; then
+    _have_src=$(sed -n 's/^CMAKE_HOME_DIRECTORY:[^=]*=//p' "$DIR/opencv/build/CMakeCache.txt" | head -1)
+    if [ -n "$_have_src" ] && [ "$_have_src" != "$DIR/opencv" ]; then
+        echo "opencv-build: build cache was generated for source $_have_src but this build uses $DIR/opencv (moved tree?) — wiping build dir"
+        rm -rf "$DIR/opencv/build"
+    fi
+fi
 # A GPU build caches the CUDA host compiler + detected arch + cuDNN result in CMakeCache.txt; a stale
 # cache (e.g. from a first attempt under a too-new gcc) silently sticks across reconfigures. On a GPU
 # (re)configure, drop just the cache so CUDA is re-detected fresh — object files under build/ stay.
