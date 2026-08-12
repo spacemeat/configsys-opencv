@@ -267,26 +267,26 @@ class OpencvBuild(Driver):
     def install(self, rc):
         script = self._script(rc)
         if not script.exists():
-            return Result(f'(opencv-build: recipe {script} not found)', 1)
+            return Result.fail(f'opencv-build: recipe {script} not found')
         try:
             backends = self._gpu_backends(rc)
         except ValueError as e:
-            return Result(f'(opencv-build: {e})', 1)
+            return Result.fail(f'opencv-build: {e}')
         # each requested backend needs its toolchain on PATH — declared via the same binding's
         # `requires:` so resolution installs it. Verify here; fail loud rather than a silent CPU
         # build. (Under --pretend every probe reports ok, so a dry run never spuriously blocks.)
         for b in backends:
             for probe, sdk, label in _GPU_PROBE[b]:
                 if not self.runner.run(probe).ok:
-                    return Result(f"(opencv-build: gpu {b!r} needs {label}, which isn't present — add "
-                                  f"the {sdk!r} component to this binding's requires:, then sync)", 1)
+                    return Result.fail(f"opencv-build: gpu {b!r} needs {label}, which isn't present — add "
+                                       f"the {sdk!r} component to this binding's requires:, then sync")
         gpu_cmake = self._gpu_cmake(backends)
         if any(b in ('cuda', 'cudnn') for b in backends):
             # steer nvcc at a gcc it supports (default too new / gcc-11 std_function bug); fail fast
             # with a fix if no usable host gcc is installed, rather than 20 min into a cryptic compile
             hc, err = self._cuda_host_compiler_flag(rc)
             if err:
-                return Result(f'(opencv-build: {err})', 1)
+                return Result.fail(f'opencv-build: {err}')
             if hc:
                 gpu_cmake = f'{gpu_cmake} {hc}'.strip()
         contrib = '1' if self._contrib(rc, backends) else '0'
