@@ -76,7 +76,12 @@ class OpencvBuild(Driver):
 
     def _build_dir(self, rc):
         # a config `locations:` override (absolute) points straight at the build tree, scope-bypassing
-        return self.location_override(rc) or self.scoped_dir(rc.fields.get('dir') or 'opencv-git', rc)
+        d = rc.fields.get('dir') or 'opencv-git'
+        # a BARE dir name is a source tree -> live under $CONFIGSYS_SRC_DIR (~/src), matching the core
+        # `source` driver's convention; an authored $VAR / absolute / ~ path passes through untouched.
+        if not str(d).startswith(('$', '/', '~')):
+            d = f'$CONFIGSYS_SRC_DIR/{d}'
+        return self.location_override(rc) or self.scoped_dir(d, rc)
 
     def _prefix(self, rc):
         p = rc.fields.get('prefix')
