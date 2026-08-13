@@ -26,7 +26,15 @@
         opencv: {
             install: [
                 { via: opencv-build   ref: 4.11.0  dir: opencv-git  requires: [ cmake, cpp-toolchain, git ] }   // CPU (source)
-                // CUDA 11 stack: nvcc 11.4–11.6 needs gcc-10 (std_function.h bug) + cuDNN 8.
+                // CUDA 11 stack: nvcc 11.4–11.6 rejects a too-new host g++ (the std_function.h bug),
+                // so this pins gcc-10 as the host compiler, plus cuDNN 8. Same downlevel-gcc
+                // availability story as blender's gcc-11 (see base routes.hu's versioned-gcc note):
+                // parallel-installable on debian/ubuntu (apt PPA) and rhel/EL (the gcc-toolset-10 SCL
+                // under /opt/rh) — additive, no toolchain rollback — but NOT on fedora, whose repos
+                // ship only the latest gcc with no parallel gcc10 compat and no clean COPR at
+                // /usr/bin/gcc-10. So opencv-cuda11 builds on debian/EL; on fedora it's an honest
+                // unmet-require (gcc-10) at resolve/check time — prefer the CUDA-12 stack below, whose
+                // newer nvcc takes the default gcc and needs no downlevel pin.
                 { via: opencv-cuda11  ref: 4.11.0  dir: opencv-git  when: "gpu:nvidia and cuda < 12"
                   requires: [ cmake, cpp-toolchain, git, cuda-toolkit-11, cudnn-8, gcc-10 ] }
                 // CUDA 12 stack: newer nvcc takes the default gcc (driver auto-checks) + cuDNN 9.
